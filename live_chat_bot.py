@@ -8,14 +8,17 @@ import openai
 # ---------------- CONFIG ----------------
 SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
 
-# Read credentials from Render environment variables
+# Read from environment variables (Render safe)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 CLIENT_SECRET_JSON = os.environ.get("CLIENT_SECRET_JSON")
-BROADCAST_ID = os.environ.get("BROADCAST_ID")          # Live stream ID
-CHANNEL_NAME = os.environ.get("CHANNEL_NAME")          # Your YouTube channel name
+BROADCAST_ID = os.environ.get("BROADCAST_ID")      # Live stream ID
+CHANNEL_NAME = os.environ.get("CHANNEL_NAME")      # Your channel name
+REPLY_DELAY_MS = int(os.environ.get("REPLY_DELAY_MS", 5000))
+MAX_TOKENS = int(os.environ.get("MAX_TOKENS", 50))
+TEMPERATURE = float(os.environ.get("TEMPERATURE", 0.7))
 # ----------------------------------------
 
-# Write client_secret.json for Google OAuth
+# Write client_secret.json from environment variable
 with open("client_secret.json", "w") as f:
     f.write(CLIENT_SECRET_JSON)
 
@@ -56,8 +59,8 @@ def generate_reply(comment_text):
     resp = openai.ChatCompletion.create(
         model="gpt-4o-mini",
         messages=[{"role":"user","content":prompt}],
-        max_tokens=50,
-        temperature=0.7
+        max_tokens=MAX_TOKENS,
+        temperature=TEMPERATURE
     )
     return resp["choices"][0]["message"]["content"].strip()
 
@@ -69,7 +72,13 @@ def main():
     replied_comments = set()  # duplicate prevention
 
     while True:
-        res = get_live_chat_messages(yt, live_chat_id, page_token=next_page_token)
+        try:
+            res = get_live_chat_messages(yt, live_chat_id, page_token=next_page_token)
+        except Exception as e:
+            print("Error fetching messages:", e)
+            time.sleep(5)
+            continue
+
         next_page_token = res.get("nextPageToken")
         messages = res.get("items", [])
 
@@ -78,14 +87,16 @@ def main():
             author = msg["authorDetails"]["displayName"]
             msg_id = msg["id"]
 
-            # Ignore self messages and duplicates
             if author != CHANNEL_NAME and msg_id not in replied_comments:
-                reply = generate_reply(text)
-                send_live_chat_message(yt, live_chat_id, reply)
-                replied_comments.add(msg_id)
-                print(f"{author}: {text} → Replied: {reply}")
+                try:
+                    reply = generate_reply(text)
+                    send_live_chat_message(yt, live_chat_id, reply)
+                    replied_comments.add(msg_id)
+                    print(f"{author}: {text} → Replied: {reply}")
+                except Exception as e:
+                    print(f"Error replying to {author}: {e}")
 
-        time.sleep(res.get("pollingIntervalMillis", 5000)/1000)
+        time.sleep(REPLY_DELAY_MS / 1000)
 
 if __name__ == "__main__":
     main()
